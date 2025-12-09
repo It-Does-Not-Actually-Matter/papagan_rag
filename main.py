@@ -1,21 +1,24 @@
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyPDFLoader , PyPDFDirectoryLoader
+from langchain_text_splitters.character import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 from langchain_community.llms import Ollama
-from langchain.chains import RetrievalQA
 from dotenv import load_dotenv
-import os
+import glob , os
 
 load_dotenv()
 
-try:
-    loader = PyPDFLoader("data/yzetik.pdf")
-    documents = loader.load()
-except Exception as e:
-    print(f"PDF install error: {e}")
-    exit()
+pdf_folder = "data"
+pdf_files = glob.glob(os.path.join(pdf_folder, "*.pdf"))
+pdf_files = pdf_files[:5] 
+
+documents = []
+for pdf_path in pdf_files:
+    loader = PyPDFLoader(pdf_path)
+    documents.extend(loader.load())
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=800,
@@ -43,26 +46,31 @@ else:
 
 llm = Ollama(
     model="llama3:8b",
-    temperature=0.1
+    temperature=0.3
 )
 
 retriever = vectorstore.as_retriever(
     search_type="similarity",
-    search_kwargs={"k": 4}
+    search_kwargs={"k": 6}
 )
+
+# Dökümanları formatlama fonksiyonu
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
 
 prompt = PromptTemplate(
     input_variables=["context", "question"],
     template = """
 You are a retrieval-based assistant.
-Answer the user's question ONLY using the given CONTEXT.
+Answer the user's question using ONLY the given CONTEXT.
 Do NOT use external knowledge.
 Do NOT make assumptions or hallucinate.
 
 Rules:
-- Write the answer in TURKISH but using ONLY ASCII characters.
+- Write the answer in TURKISH using ONLY ASCII characters.
 - Do NOT use Turkish characters like: ç, ğ, ş, ı, İ, ö, ü.
-- The answer must be SHORT, CLEAR, and DIRECT.
+- The answer should be CLEAR, EXPLANATORY, and 3 to 6 sentences long.
+- You may rephrase the context but do NOT add new information.
 - If the answer is not found in the context, respond exactly with:
   "Baglamda cevap bulunamadi."
 
@@ -72,28 +80,28 @@ CONTEXT:
 QUESTION:
 {question}
 
-ASCII TURKISH ANSWER:
+DETAILED ASCII TURKISH ANSWER:
 """
 )
 
-chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    retriever=retriever,
-    return_source_documents=False,
-    chain_type_kwargs={"prompt": prompt}
+rag_chain = (
+    {
+        "context": retriever | format_docs,
+        "question": RunnablePassthrough()
+    }
+    | prompt
+    | llm
+    | StrOutputParser()
 )
 
-print("---RAG---'):")
+print("---RAG---")
 while True:
     query = input("Kullanici: ")
     if query.lower() == "exit":
         break
 
     try:
-        response = chain.invoke({"query": query})
-        if isinstance(response, dict):
-            print(f"\nCevap: {response.get('result', response)}")
-        else:
-            print(f"\nCevap: {response}")
+        response = rag_chain.invoke(query)
+        print(f"\nCevap: {response}\n")
     except Exception as e:
         print(f"Query error: {e}")
