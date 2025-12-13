@@ -79,6 +79,8 @@ ollama list
 
 ## Kullanim
 
+### Terminal Modu
+
 Projeyi calistirin:
 
 ```bash
@@ -100,6 +102,39 @@ Kullanici: exit
 
 Cikmak icin `exit` yazin.
 
+### API Modu (Open WebUI Entegrasyonu)
+
+RAG sistemini OpenAI-uyumlu bir API olarak calistirabilirsiniz:
+
+```bash
+python api.py
+```
+
+API sunucusu `http://localhost:8000` adresinde calisir.
+
+#### API Endpoint'leri
+
+| Endpoint | Method | Aciklama |
+|----------|--------|----------|
+| `/v1/models` | GET | Mevcut modelleri listeler |
+| `/v1/chat/completions` | POST | Sohbet tamamlama (RAG ile) |
+| `/health` | GET | Saglik kontrolu |
+
+#### Open WebUI ile Kullanim
+
+1. Open WebUI'yi Docker ile kurun:
+
+```powershell
+docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -e OPENAI_API_BASE_URL=http://host.docker.internal:8000/v1 -e OPENAI_API_KEY=dummy -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
+```
+
+2. Tarayicinizda `http://localhost:3000` adresine gidin
+3. Hesap olusturun (yerel, sadece sizin icin)
+4. Settings > Connections > OpenAI API bolumunde:
+   - API Base URL: `http://host.docker.internal:8000/v1`
+   - API Key: `dummy`
+5. Model olarak `papagan-rag` secin ve kullanmaya baslayin
+
 ## Teknik Detaylar
 
 - **Embedding Model**: BAAI/bge-m3
@@ -117,12 +152,15 @@ Cikmak icin `exit` yazin.
 - Turkce cevaplar uretir (ASCII karakterler ile)
 - Chroma DB persist ile tekrar yukleme gerektirmez
 - Hallusinasyon onleme mekanizmasi
+- OpenAI-uyumlu API ile Open WebUI entegrasyonu
+- FastAPI tabanli REST API
 
 ## Dosya Yapisi
 
 ```
 papagan_rag/
-├── main.py              # Ana uygulama kodu
+├── main.py              # Terminal modu (CLI)
+├── api.py               # API modu (Open WebUI entegrasyonu)
 ├── requirements.txt     # Python bagimliliklar
 ├── README.md           # Dokumantasyon
 ├── data/               # PDF dosyalari (sizin olusturacaginiz)
