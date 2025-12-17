@@ -149,34 +149,6 @@ print("✅ Sistem hazır!\n")
 
 
 # Gradio fonksiyonları
-def transcribe_audio(audio):
-    """Ses kaydını metne çevir"""
-    if audio is None:
-        return ""
-    
-    try:
-        # Ses dosyasını kaydet
-        audio_path = os.path.join(audio_folder, "temp_recording.wav")
-        
-        # Gradio audio'dan gelen tuple: (sample_rate, audio_data)
-        import soundfile as sf
-        if isinstance(audio, tuple):
-            sample_rate, audio_data = audio
-            sf.write(audio_path, audio_data, sample_rate)
-        else:
-            # Eğer dosya yolu gelirse direkt kullan
-            audio_path = audio
-        
-        # Whisper ile transkripsiyonu al
-        result = whisper_model.transcribe(audio_path, language="tr", fp16=False)
-        question = result['text'].strip()
-        
-        return question
-    
-    except Exception as e:
-        return f"❌ Hata: {str(e)}"
-
-
 def get_sources(question):
     """Soruyla ilgili kaynak dökümanları al"""
     if retriever is None:
@@ -191,7 +163,7 @@ def get_sources(question):
                 "index": i + 1,
                 "file": os.path.basename(doc.metadata.get("source", "Bilinmeyen")),
                 "page": doc.metadata.get("page", "?"),
-                "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
+                "content": doc.page_content[:150] + "..." if len(doc.page_content) > 150 else doc.page_content
             }
             sources.append(source_info)
         
@@ -201,77 +173,109 @@ def get_sources(question):
 
 
 def format_sources_html(sources):
-    """Kaynakları HTML chip'ler olarak formatla"""
+    """Kaynakları HTML olarak formatla"""
     if not sources:
         return ""
     
-    html = '<div style="margin-top: 20px;">'
-    html += '<h3 style="font-size: 18px; margin-bottom: 10px; color: #374151;">📚 Kullanılan Kaynaklar:</h3>'
-    html += '<div style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">'
+    html = '<div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 10px; border-left: 4px solid #667eea;">'
+    html += '<div style="font-size: 14px; font-weight: 600; color: #374151; margin-bottom: 10px;">📚 Kaynaklar:</div>'
+    html += '<div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">'
     
+    # Kaynak chip'leri
     for source in sources:
         html += f'''
-        <div style="
+        <span style="
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 8px 16px;
-            border-radius: 20px;
-            font-size: 14px;
+            padding: 6px 14px;
+            border-radius: 16px;
+            font-size: 13px;
             font-weight: 500;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: inline-block;
+            box-shadow: 0 2px 4px rgba(102, 126, 234, 0.3);
         ">
-            📄 {source["file"]} - Sayfa {source["page"]}
-        </div>
+            📄 {source["file"]} - s.{source["page"]}
+        </span>
         '''
     
     html += '</div>'
     
-    # Kaynak detaylarını accordion olarak ekle
-    html += '<details style="margin-top: 10px; padding: 15px; background: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">'
-    html += '<summary style="cursor: pointer; font-weight: 600; font-size: 16px; color: #1f2937; margin-bottom: 10px;">🔍 Kaynak Detayları</summary>'
+    # Kaynak detayları
+    html += '<details style="margin-top: 8px;">'
+    html += '<summary style="cursor: pointer; font-size: 13px; color: #6b7280; font-weight: 500;">🔍 Detayları göster</summary>'
+    html += '<div style="margin-top: 10px;">'
     
     for source in sources:
         html += f'''
         <div style="
-            margin-top: 15px;
-            padding: 15px;
+            margin-top: 10px;
+            padding: 12px;
             background: white;
-            border-left: 4px solid #667eea;
             border-radius: 6px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            border: 1px solid #e5e7eb;
         ">
-            <div style="font-weight: 600; color: #667eea; margin-bottom: 8px; font-size: 15px;">
-                Kaynak #{source["index"]}: {source["file"]} (Sayfa {source["page"]})
+            <div style="font-size: 12px; font-weight: 600; color: #667eea; margin-bottom: 6px;">
+                #{source["index"]} - {source["file"]} (Sayfa {source["page"]})
             </div>
-            <div style="color: #4b5563; line-height: 1.6; font-size: 14px;">
+            <div style="font-size: 12px; color: #4b5563; line-height: 1.5;">
                 {source["content"]}
             </div>
         </div>
         '''
     
-    html += '</details></div>'
+    html += '</div></details></div>'
     return html
 
 
-def process_text_query(question):
-    """Metin sorusunu işle ve kaynakları göster"""
-    if not question or not question.strip():
-        return "⚠️ Lütfen bir soru girin!", ""
+def chat_response(message, history):
+    """Chat mesajını işle ve cevap döndür"""
+    if not message or not message.strip():
+        return "⚠️ Lütfen bir soru yazın!"
     
     if rag_chain is None:
-        return "⚠️ Lütfen önce PDF dosyaları yükleyin!", ""
+        return "⚠️ Lütfen önce PDF dosyaları yükleyin! 'Belge Yönetimi' sekmesinden PDF ekleyebilirsiniz."
     
     try:
         # Cevabı al
-        response = rag_chain.invoke(question.strip())
+        response = rag_chain.invoke(message.strip())
         
-        # Kaynakları al
-        sources = get_sources(question.strip())
+        # Kaynakları al ve formatla
+        sources = get_sources(message.strip())
         sources_html = format_sources_html(sources)
         
-        return response, sources_html
+        # Cevap + kaynakları birleştir
+        full_response = response + "\n\n" + sources_html
+        
+        return full_response
     except Exception as e:
-        return f"❌ Hata: {str(e)}", ""
+        return f"❌ Hata oluştu: {str(e)}"
+
+
+def transcribe_audio(audio):
+    """Ses kaydını metne çevir"""
+    if audio is None:
+        return None
+    
+    try:
+        # Ses dosyasını kaydet
+        audio_path = os.path.join(audio_folder, "temp_recording.wav")
+        
+        # Gradio audio'dan gelen tuple: (sample_rate, audio_data)
+        import soundfile as sf
+        if isinstance(audio, tuple):
+            sample_rate, audio_data = audio
+            sf.write(audio_path, audio_data, sample_rate)
+        else:
+            audio_path = audio
+        
+        # Whisper ile transkripsiyonu al
+        result = whisper_model.transcribe(audio_path, language="tr", fp16=False)
+        question = result['text'].strip()
+        
+        return question
+    
+    except Exception as e:
+        return f"❌ Transkripsiyon hatası: {str(e)}"
 
 
 def upload_pdf(files):
@@ -314,197 +318,175 @@ def get_pdf_list():
 
 # Gradio arayüzü
 with gr.Blocks(
-    title="🦜 Papağan RAG - AI Asistan",
+    title="🦜 Papağan RAG",
     theme=gr.themes.Soft(
         primary_hue="blue",
         secondary_hue="indigo",
         font=gr.themes.GoogleFont("Inter"),
-        text_size=gr.themes.sizes.text_lg,
     ),
     css="""
         .gradio-container {
-            max-width: 1400px !important;
+            max-width: 1200px !important;
         }
-        .header {
+        /* Header stil */
+        .app-header {
             text-align: center;
-            padding: 30px;
+            padding: 30px 20px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border-radius: 15px;
-            margin-bottom: 30px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
         }
-        .header h1 {
-            font-size: 48px !important;
-            margin-bottom: 10px;
+        .app-header h1 {
+            font-size: 42px;
+            margin: 0 0 8px 0;
             font-weight: 700;
         }
-        .header p {
-            font-size: 20px !important;
+        .app-header p {
+            font-size: 16px;
+            margin: 0;
             opacity: 0.95;
         }
-        /* Daha büyük textbox'lar */
-        textarea {
+        /* Chat mesajlarını büyüt */
+        .message {
             font-size: 16px !important;
             line-height: 1.6 !important;
         }
-        /* Daha büyük butonlar */
-        button {
-            font-size: 18px !important;
-            font-weight: 600 !important;
-            padding: 12px 24px !important;
+        /* Input alanını büyüt */
+        .input-area textarea {
+            font-size: 16px !important;
+            min-height: 60px !important;
         }
-        /* Label'ları büyüt */
-        label {
-            font-size: 18px !important;
-            font-weight: 600 !important;
-            margin-bottom: 8px !important;
+        /* Butonları büyüt */
+        button {
+            font-size: 15px !important;
+            font-weight: 500 !important;
         }
         /* Tab'ları büyüt */
         .tab-nav button {
-            font-size: 18px !important;
-            padding: 12px 20px !important;
-        }
-        /* Markdown içeriğini büyüt */
-        .prose {
             font-size: 16px !important;
+            padding: 10px 16px !important;
         }
-        .prose h3 {
-            font-size: 20px !important;
+        /* Chatbot alanını genişlet */
+        .chatbot {
+            height: 600px !important;
         }
     """
 ) as app:
     
     # Header
     gr.HTML("""
-        <div class="header">
+        <div class="app-header">
             <h1>🦜 Papağan RAG</h1>
-            <p>Yapay Zeka Destekli Belge Asistanı - Sesli & Yazılı Soru-Cevap</p>
+            <p>Yapay Zeka Destekli Belge Asistanı - ChatGPT Tarzı Arayüz</p>
         </div>
     """)
     
     with gr.Tabs():
-        # Ana Sorgu Sekmesi (Birleştirilmiş)
-        with gr.Tab("💬 Soru Sor", id="main"):
+        # Chat Sekmesi
+        with gr.Tab("💬 Sohbet"):
+            gr.Markdown("""
+            ### 💡 Nasıl Kullanılır:
+            - 💬 Kaysın bir chat gibi soru sorun, cevapları message bubble'larda görün
+            - 🎤 Ses kaydı yapıp metne çevirebilirsiniz
+            - 📚 Her cevabın altında hangi kaynaklardan bilgi alındığını görebilirsiniz
+            """)
+            
+            # Chat Interface
+            chatbot = gr.Chatbot(
+                label="Sohbet Geçmişi",
+                height=600,
+                bubble_full_width=False,
+                show_copy_button=True,
+                avatar_images=(
+                    None,  # Kullanıcı avatarı
+                    None   # Bot avatarı
+                )
+            )
+            
             with gr.Row():
-                # Sol kolon - Girişler
+                with gr.Column(scale=4):
+                    msg = gr.Textbox(
+                        label="Mesajınız",
+                        placeholder="Sorunuzu buraya yazın... (Enter ile gönder)",
+                        lines=2,
+                        max_lines=5,
+                        show_label=False,
+                        container=False
+                    )
                 with gr.Column(scale=1):
-                    gr.Markdown("### 🎤 Sesli veya Yazılı Soru")
-                    
-                    # Ses kaydı
-                    audio_input = gr.Audio(
-                        label="Sesli Soru (Mikrofonu kullanın)",
+                    audio_record = gr.Audio(
+                        label="🎤 Ses Kaydı",
                         type="numpy",
-                        sources=["microphone"]
-                    )
-                    
-                    gr.Markdown("**veya**")
-                    
-                    # Metin girişi
-                    text_input = gr.Textbox(
-                        label="Yazılı Soru",
-                        placeholder="Sorunuzu buraya yazın...",
-                        lines=5,
-                        max_lines=10
-                    )
-                    
-                    with gr.Row():
-                        transcribe_btn = gr.Button(
-                            "🎙️ Sesi Metne Çevir",
-                            variant="secondary",
-                            size="lg",
-                            scale=1
-                        )
-                        submit_btn = gr.Button(
-                            "🔍 Sorgula",
-                            variant="primary",
-                            size="lg",
-                            scale=1
-                        )
-                
-                # Sağ kolon - Çıktılar
-                with gr.Column(scale=1):
-                    gr.Markdown("### 💡 Cevap")
-                    
-                    answer_output = gr.Textbox(
-                        label="Cevap",
-                        lines=12,
-                        max_lines=20,
-                        show_copy_button=True
-                    )
-                    
-                    sources_output = gr.HTML(
-                        label="Kaynaklar"
+                        sources=["microphone"],
+                        show_label=False
                     )
             
-            # Ses → Metin çevirme
+            with gr.Row():
+                transcribe_btn = gr.Button("🎙️ Sesi Metne Çevir", variant="secondary", size="sm")
+                clear = gr.Button("�️ Sohbeti Temizle", variant="stop", size="sm")
+            
+            # Chat fonksiyonları
+            def respond(message, chat_history):
+                bot_message = chat_response(message, chat_history)
+                chat_history.append((message, bot_message))
+                return "", chat_history
+            
+            # Mesaj gönderme
+            msg.submit(respond, [msg, chatbot], [msg, chatbot])
+            
+            # Ses → Metin
             transcribe_btn.click(
                 fn=transcribe_audio,
-                inputs=audio_input,
-                outputs=text_input
+                inputs=audio_record,
+                outputs=msg
             )
             
-            # Sorgulama
-            submit_btn.click(
-                fn=process_text_query,
-                inputs=text_input,
-                outputs=[answer_output, sources_output]
-            )
-            
-            # Enter tuşu ile sorgulama
-            text_input.submit(
-                fn=process_text_query,
-                inputs=text_input,
-                outputs=[answer_output, sources_output]
-            )
+            # Temizleme
+            clear.click(lambda: None, None, chatbot, queue=False)
             
             gr.Markdown("""
             ---
-            ### 📝 Nasıl Kullanılır:
-            
-            **Sesli Soru için:**
-            1. 🎤 Mikrofon simgesine tıklayın
-            2. Sorunuzu sesli olarak sorun
-            3. Kaydı durdurun
-            4. "Sesi Metne Çevir" butonuna tıklayın (metin kutusuna gelecek)
-            5. "Sorgula" butonuna tıklayın
-            
-            **Yazılı Soru için:**
-            1. ⌨️ Sorunuzu metin kutusuna yazın
-            2. "Sorgula" butonuna tıklayın veya Enter'a basın
+            **� İpuçları:**
+            - Uzun sohbetlerde "Sohbeti Temizle" ile yeni başlayabilirsiniz
+            - Ses kaydından sonra metni düzenleyebilirsiniz
+            - Her cevabın altındaki kaynaklara tıklayarak detayları görebilirsiniz
             """)
         
-        # PDF Yükleme Sekmesi
+        # PDF Yönetimi Sekmesi
         with gr.Tab("📁 Belge Yönetimi"):
+            gr.Markdown("## 📚 PDF Belgelerini Yönetin")
+            
             with gr.Row():
                 with gr.Column():
-                    gr.Markdown("### 📤 PDF Yükle")
+                    gr.Markdown("### 📤 Yeni PDF Yükle")
                     pdf_upload = gr.File(
-                        label="PDF Dosyaları Seçin",
+                        label="PDF Dosyalarını Seçin",
                         file_types=[".pdf"],
                         file_count="multiple",
-                        height=200
+                        height=150
                     )
                     upload_button = gr.Button(
-                        "📤 Dosyaları Yükle ve İşle",
+                        "📤 Yükle ve İşle",
                         variant="primary",
                         size="lg"
                     )
                     upload_status = gr.Textbox(
-                        label="Yükleme Durumu",
-                        lines=4,
+                        label="Durum",
+                        lines=3,
                         interactive=False
                     )
                 
                 with gr.Column():
-                    gr.Markdown("### 📋 Yüklü Dosyalar")
+                    gr.Markdown("### 📋 Sistemdeki PDF'ler")
                     pdf_list_button = gr.Button(
-                        "� Listeyi Yenile",
+                        "🔄 Listeyi Yenile",
                         size="lg"
                     )
                     pdf_list = gr.Textbox(
-                        label="Sistemdeki PDF Dosyaları",
-                        lines=15,
+                        label="Yüklü Dosyalar",
+                        lines=12,
                         interactive=False,
                         value=get_pdf_list()
                     )
@@ -527,22 +509,82 @@ with gr.Blocks(
             ---
             ### ℹ️ Bilgilendirme:
             - 📚 Birden fazla PDF dosyası yükleyebilirsiniz
-            - 🔄 Yüklenen dosyalar otomatik olarak sisteme eklenir
-            - ⚡ Maksimum 5 PDF dosyası aynı anda işlenir
+            - 🔄 Yüklenen dosyalar otomatik olarak vektör veritabanına eklenir
+            - ⚡ Maksimum 5 PDF dosyası işlenir (performans için)
             - 💾 Dosyalar `data` klasörüne kaydedilir
+            - 🗄️ Vektör veritabanı `chroma_db` klasöründe saklanır
+            """)
+        
+        # Sistem Bilgisi Sekmesi
+        with gr.Tab("ℹ️ Bilgi"):
+            gr.Markdown("""
+            # 🦜 Papağan RAG Hakkında
+            
+            ## 🔧 Sistem Bileşenleri
+            
+            ### 🎤 Ses Tanıma
+            - **Model:** OpenAI Whisper (Medium)
+            - **Dil:** Türkçe optimizasyonlu
+            - **Cihaz:** """ + device + """
+            
+            ### 🤖 Dil Modeli
+            - **Model:** Llama 3 (8B parametreli)
+            - **Sıcaklık:** 0.1 (tutarlı cevaplar için)
+            - **Çalıştırma:** Ollama üzerinden
+            
+            ### 📊 Embedding ve Arama
+            - **Embedding Modeli:** BAAI/bge-m3 (Çok dilli)
+            - **Vektör Veritabanı:** ChromaDB
+            - **Chunk Boyutu:** 800 karakter
+            - **Overlap:** 120 karakter
+            - **Arama:** En benzer 6 doküman
+            
+            ### 🎨 Arayüz
+            - **Framework:** Gradio
+            - **Tema:** Soft (Blue/Indigo)
+            - **Font:** Inter (Google Font)
+            
+            ## � Kullanım Akışı
+            
+            1. **PDF Yükleme:** Belgelerinizi sisteme ekleyin
+            2. **Vektörleştirme:** Belgeler otomatik olarak parçalanır ve vektörlere dönüştürülür
+            3. **Soru Sorma:** Metin veya ses ile soru sorun
+            4. **RAG Süreci:**
+               - Sorunuz vektöre dönüştürülür
+               - En ilgili belge parçaları bulunur
+               - Bu parçalar LLM'e context olarak verilir
+               - LLM sadece bu context'i kullanarak cevap üretir
+            5. **Kaynak Gösterimi:** Hangi belgelerden bilgi alındığı gösterilir
+            
+            ## ⚡ Özellikler
+            
+            - ✅ ChatGPT tarzı chat arayüzü
+            - ✅ Sesli soru sorma
+            - ✅ Ses → metin dönüştürme
+            - ✅ Kaynak gösterimi (citation chips)
+            - ✅ Sohbet geçmişi
+            - ✅ Çoklu PDF desteği
+            - ✅ Türkçe optimizasyon
+            - ✅ ASCII-only output (uyumluluk için)
+            
+            ## 🎯 En İyi Sonuçlar İçin
+            
+            - Spesifik ve net sorular sorun
+            - PDF'lerinizin metin formatında olmasına dikkat edin (taranmış görüntüler değil)
+            - Sistemde ilgili belgeler olduğundan emin olun
+            - Uzun sohbetlerde bazen temizleme yapmak performansı artırır
+            
+            ---
+            
+            **Geliştirici Notu:** Bu sistem tamamen lokal çalışır. Verileriniz dışarı çıkmaz.
             """)
     
     # Footer
     gr.Markdown("""
     ---
-    ### 🔧 Sistem Bilgisi:
-    - **Ses Tanıma:** OpenAI Whisper (Medium)
-    - **Dil Modeli:** Llama 3 (8B parametreli)
-    - **Embeddings:** BAAI/bge-m3 (Çok dilli)
-    - **Vector Database:** ChromaDB
-    - **Framework:** LangChain
-    
-    💡 **İpucu:** Sistemdeki PDF belgelerden en iyi sonuçları almak için açık ve spesifik sorular sorun!
+    <div style="text-align: center; color: #6b7280; font-size: 14px;">
+        <p>🦜 Papağan RAG v1.0 | Powered by LangChain, Whisper & Llama 3</p>
+    </div>
     """)
 
 
@@ -552,6 +594,5 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=7860,
         share=False,
-        show_error=True,
-        favicon_path=None
+        show_error=True
     )
