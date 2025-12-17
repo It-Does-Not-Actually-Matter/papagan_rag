@@ -85,6 +85,12 @@ llm = Ollama(
     model="llama3:8b",
     temperature=0.1
 )
+
+
+
+
+
+
 print("✅ LLM hazır")
 
 # RAG chain'i oluştur
@@ -397,12 +403,7 @@ with gr.Blocks(
             chatbot = gr.Chatbot(
                 label="Sohbet Geçmişi",
                 height=600,
-                bubble_full_width=False,
-                show_copy_button=True,
-                avatar_images=(
-                    None,  # Kullanıcı avatarı
-                    None   # Bot avatarı
-                )
+                show_copy_button=True
             )
             
             with gr.Row():
