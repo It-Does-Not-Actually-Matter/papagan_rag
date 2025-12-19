@@ -1,6 +1,7 @@
 import os
 import torch
 import glob
+import warnings
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -21,6 +22,9 @@ from rich.text import Text
 from rich.align import Align
 from rich.layout import Layout
 import sys
+
+# LangChain deprecation uyarılarını bastır
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 ##
 load_dotenv()
 
