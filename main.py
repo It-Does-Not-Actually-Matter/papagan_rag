@@ -159,7 +159,6 @@ def create_rag_chain(vectorstore):
         | StrOutputParser()
     )
 
-<<<<<<< HEAD
 WHISPER_MODEL = None
 
 def get_voice_input():
@@ -190,7 +189,12 @@ def get_voice_input():
 
     print("Transcribing...")
     result = WHISPER_MODEL.transcribe(path, language="tr")
-    os.remove(path)
+    
+    try:
+        os.remove(path)
+    except Exception:
+        pass
+    
     return result["text"]
 
 def display_welcome_screen():
