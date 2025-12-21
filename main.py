@@ -2,6 +2,8 @@ import os
 import torch
 import glob
 import warnings
+import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -15,76 +17,95 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import whisper
+import librosa
 import tempfile
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 from rich.align import Align
-from rich.layout import Layout
 import sys
 
-# LangChain deprecation uyarılarını bastır
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-##
 load_dotenv()
 
 PDF_FOLDER = "data"
 DB_DIR = "./chroma_db"
 os.makedirs(PDF_FOLDER, exist_ok=True)
 
+_EMBEDDINGS_CACHE = None
+WHISPER_MODEL = None
+
+
+def get_embeddings():
+    global _EMBEDDINGS_CACHE
+    if _EMBEDDINGS_CACHE is None:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {device}")
+        _EMBEDDINGS_CACHE = HuggingFaceEmbeddings(
+            model_name="BAAI/bge-m3",
+            model_kwargs={"device": device},
+            encode_kwargs={"normalize_embeddings": True}
+        )
+    return _EMBEDDINGS_CACHE
+
+
 def validate_file_constraints(current_count, new_files):
     MAX_BATCH = 50
     MAX_TOTAL = 200
     
-    # 1. Check: Batch Size
     if len(new_files) > MAX_BATCH:
-        print(f"\n[ERROR] Tek seferde en fazla {MAX_BATCH} dosya yüklenebilir.")
+        print(f"\n[ERROR] Tek seferde en fazla {MAX_BATCH} dosya yuklenebilir.")
         print(f"Tespit edilen yeni dosya: {len(new_files)}")
         excess = len(new_files) - MAX_BATCH
-        print(f"Lütfen {excess} adet dosyayı siliniz.")
+        print(f"Lutfen {excess} adet dosyayi siliniz.")
         print("Yeni dosyalar (ilk 10):")
         for f in new_files[:10]:
             print(f" - {os.path.basename(f)}")
-        if len(new_files) > 10: print(" ...")
+        if len(new_files) > 10:
+            print(" ...")
         return False
 
-    # 2. Check: Total Size
     if current_count + len(new_files) > MAX_TOTAL:
-        print(f"\n[ERROR] Maksimum {MAX_TOTAL} dosya limitine ulaşıldı.")
+        print(f"\n[ERROR] Maksimum {MAX_TOTAL} dosya limitine ulasildi.")
         print(f"Mevcut: {current_count}, Eklenecek: {len(new_files)}")
-        print("Lütfen dosya sayısını azaltınız.")
+        print("Lutfen dosya sayisini azaltiniz.")
         return False
         
     return True
 
-def initialize_vectorstore():
-    """Initializing Vector Database."""
-    print("Initializing Vector Database...")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="BAAI/bge-m3",
-        model_kwargs={"device": device},
-        encode_kwargs={"normalize_embeddings": True}
-    )
+def load_single_pdf(filepath):
+    try:
+        return PyPDFLoader(filepath).load()
+    except Exception as e:
+        print(f"Skipping {filepath}: {e}")
+        return []
+
+
+def load_pdfs_parallel(files, max_workers=4):
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        results = executor.map(load_single_pdf, files)
+    return [doc for docs in results for doc in docs]
+
+
+def initialize_vectorstore():
+    print("Initializing Vector Database...")
+    embeddings = get_embeddings()
 
     if os.path.exists(DB_DIR):
         print("Loading existing ChromaDB...")
         vectorstore = Chroma(persist_directory=DB_DIR, embedding_function=embeddings)
         
-        # Check for new files to add incrementally
         print("Checking for new files...")
         existing_data = vectorstore.get()
         existing_sources = set()
         if existing_data and 'metadatas' in existing_data:
             for m in existing_data['metadatas']:
                 if m and 'source' in m:
-                    existing_sources.add(m['source'])
+                    existing_sources.add(os.path.abspath(m['source']))
         
-        # Get all current files
         all_files = glob.glob(os.path.join(PDF_FOLDER, "*.pdf"))
-        new_files = [f for f in all_files if f not in existing_sources]
+        new_files = [f for f in all_files if os.path.abspath(f) not in existing_sources]
         
         if new_files:
             if not validate_file_constraints(len(existing_sources), new_files):
@@ -92,15 +113,10 @@ def initialize_vectorstore():
                 return vectorstore
 
             print(f"Found {len(new_files)} new files. Adding to DB...")
-            new_docs_content = []
-            for f in new_files:
-                try:
-                    new_docs_content.extend(PyPDFLoader(f).load())
-                except Exception as e:
-                    print(f"Skipping {f}: {e}")
+            new_docs_content = load_pdfs_parallel(new_files)
             
             if new_docs_content:
-                splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+                splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
                 chunks = splitter.split_documents(new_docs_content)
                 vectorstore.add_documents(chunks)
                 print(f"Successfully added {len(new_files)} new files.")
@@ -110,30 +126,31 @@ def initialize_vectorstore():
         print("Creating new ChromaDB from PDFs...")
         files = glob.glob(os.path.join(PDF_FOLDER, "*.pdf"))
         
+        if not files:
+            print("No PDF documents found in data folder.")
+            return None
+        
         if not validate_file_constraints(0, files):
             return None
 
-        documents = []
-        for f in files:
-            try:
-                documents.extend(PyPDFLoader(f).load())
-            except Exception as e:
-                print(f"Skipping {f}: {e}")
+        documents = load_pdfs_parallel(files)
         
         if documents:
-            splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=120)
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
             docs = splitter.split_documents(documents)
             vectorstore = Chroma.from_documents(docs, embeddings, persist_directory=DB_DIR)
         else:
-            print("No PDF documents found.")
+            print("No PDF documents could be loaded.")
             vectorstore = None
 
     return vectorstore
 
+
 def create_rag_chain(vectorstore):
-    if not vectorstore: return None
+    if not vectorstore:
+        return None
     
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 5})
+    retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
     llm = Ollama(model="llama3:8b", temperature=0.3)
     
     prompt = PromptTemplate(
@@ -142,7 +159,7 @@ def create_rag_chain(vectorstore):
         You are a helpful AI assistant.
         Answer the user's question using ONLY the provided CONTEXT.
         Do not make assumptions or use outside knowledge.
-        If the answer is not found in the context, say "Bu konuda bağlamda bilgi bulunamadı."
+        If the answer is not found in the context, say "Bu konuda baglamda bilgi bulunamadi."
         Respond nicely and strictly in Turkish.
         
         CONTEXT:
@@ -163,16 +180,15 @@ def create_rag_chain(vectorstore):
         | StrOutputParser()
     )
 
-WHISPER_MODEL = None
 
 def get_voice_input():
     global WHISPER_MODEL
     try:
         if WHISPER_MODEL is None:
             print("Loading Whisper model...")
-            WHISPER_MODEL = whisper.load_model("medium")
+            WHISPER_MODEL = whisper.load_model("small")
 
-        fs = 44100
+        fs = 16000
         print("Press Enter to start recording...")
         input()
         print("Recording... Press Enter to stop.")
@@ -188,41 +204,19 @@ def get_voice_input():
             return ""
 
         audio = np.concatenate(recording, axis=0)
-        
-        tmp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        path = tmp_file.name
-        tmp_file.close()
-        
-        sf.write(path, audio, fs)
+        audio_data = audio.flatten().astype(np.float32)
         
         print("Transcribing...")
-        audio_data, sr = sf.read(path)
-        audio_data = audio_data.flatten().astype(np.float32)
-        
-        if sr != 16000:
-            import librosa
-            audio_data = librosa.resample(audio_data, orig_sr=sr, target_sr=16000)
-        
         result = WHISPER_MODEL.transcribe(audio_data, language="tr")
-        
-        try:
-            os.remove(path)
-        except Exception:
-            pass
         
         return result["text"]
     except Exception as e:
         print(f"Voice input error: {e}")
-        import traceback
         traceback.print_exc()
         return ""
 
 
-def display_welcome_screen():
-    """Görsel hoş geldiniz ekranını göster."""
-    console = Console()
-    
-    # Ana başlık
+def display_welcome_screen(console):
     papagan_title = """
     ██████╗  █████╗ ██████╗  █████╗  ██████╗  █████╗ ███╗   ██╗
     ██╔══██╗██╔══██╗██╔══██╗██╔══██╗██╔════╝ ██╔══██╗████╗  ██║
@@ -234,38 +228,31 @@ def display_welcome_screen():
     
     title_text = Text(papagan_title, style="bold cyan")
     
-    # Açıklama metni
     description = Text(
-        "🦜 Akıllı RAG Sistemi - Sorularınıza cevap vermeye hazır!",
+        "Papagan Chatbot - Sorulariniza cevap vermeye hazir!",
         justify="center",
         style="bold yellow"
     )
     
-    # Bilgilendirme paneli
     info_content = Text()
-    info_content.append("💡 İpuçları:\n", style="bold green")
-    info_content.append("  • Sorunuzu yazın ve Enter tuşuna basın\n")
-    info_content.append("  • Çıkmak için ", style="white")
+    info_content.append("Ipuclari:\n", style="bold green")
+    info_content.append("  - Sorunuzu yazin ve Enter tusuna basin\n")
+    info_content.append("  - Cikmak icin ", style="white")
     info_content.append("exit", style="bold red")
-    info_content.append(" veya ", style="white")
-    info_content.append("quit", style="bold red")
-    info_content.append(" yazın\n", style="white")
-    info_content.append("  • ", style="white")
-    info_content.append("Ctrl+C", style="bold magenta")
-    info_content.append(" tuşu ile de çıkabilirsiniz", style="white")
+    info_content.append(" yazin", style="white")
     
-    # Paneller oluştur
     console.print(Align.center(title_text))
     console.print(Align.center(description))
     console.print()
     console.print(Panel(
         info_content,
         border_style="cyan",
-        title="[bold]Yardım[/bold]",
+        title="[bold]Yardim[/bold]",
         expand=False,
         width=60
     ))
     console.print()
+
 
 def main():
     console = Console()
@@ -274,27 +261,27 @@ def main():
     
     if not rag_chain:
         error_panel = Panel(
-            "[bold red]Hata![/bold red] RAG zinciri başlatılamadı.\nLütfen verilerinizi kontrol edin.",
+            "[bold red]Hata![/bold red] RAG zinciri baslatilamadi.\nLutfen verilerinizi kontrol edin.",
             border_style="red",
-            title="[bold red]Başlatma Hatası[/bold red]"
+            title="[bold red]Baslatma Hatasi[/bold red]"
         )
         console.print(error_panel)
         return
 
-    display_welcome_screen()
+    display_welcome_screen(console)
 
     while True:
         try:
-            choice = console.input("[bold cyan]👤 Type text or 'v' for voice (q to quit):[/bold cyan] ").strip()
+            choice = console.input("[bold cyan]Type text or 'v' for voice (exit to quit):[/bold cyan] ").strip()
             
             if not choice:
                 continue
             
-            if choice.lower() == 'q':
+            if choice.lower() == 'exit':
                 farewell = Panel(
-                    "[bold yellow]Görüşmek üzere! 🦜[/bold yellow]",
+                    "[bold yellow]Gorusmek uzere![/bold yellow]",
                     border_style="yellow",
-                    title="[bold]Hoşça Kalın[/bold]"
+                    title="[bold]Hosca Kalin[/bold]"
                 )
                 console.print(farewell)
                 break
@@ -308,11 +295,8 @@ def main():
             if not user_input.strip():
                 continue
             
-            # Papagan cevabı
-            console.print("[bold magenta]🦜 Papagan:[/bold magenta] ", end="", soft_wrap=True)
-            response_text = ""
+            console.print("[bold magenta]Papagan:[/bold magenta] ", end="", soft_wrap=True)
             for chunk in rag_chain.stream(user_input):
-                response_text += chunk
                 console.print(chunk, end="", soft_wrap=True)
             console.print()
             console.print()
@@ -320,9 +304,9 @@ def main():
         except KeyboardInterrupt:
             console.print()
             farewell = Panel(
-                "[bold yellow]Program sonlandırıldı. Hoşça kalın! 👋[/bold yellow]",
+                "[bold yellow]Program sonlandirildi. Hosca kalin![/bold yellow]",
                 border_style="yellow",
-                title="[bold]Çıkış[/bold]"
+                title="[bold]Cikis[/bold]"
             )
             console.print(farewell)
             break
@@ -333,6 +317,7 @@ def main():
                 title="[bold red]Hata[/bold red]"
             )
             console.print(error_msg)
+
 
 if __name__ == "__main__":
     main()

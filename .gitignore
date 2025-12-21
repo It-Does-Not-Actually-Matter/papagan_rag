@@ -1,6 +1,5 @@
 chroma_db/
 env/
-data/
 __pycache__/
 *.pyc
 .DS_Store
